@@ -1,0 +1,89 @@
+# 把 ikxin/kms-tools 构建成静态站点并发布到 GitHub Pages
+#
+# 为什么是「拉上游源码自己构建」而不是 fork：
+#   GitHub 对 fork 出来的仓库默认**禁用 Actions**，需要人去网页点一次确认；
+#   而新建仓库的 Actions 默认可用 —— 这样整条链可以全自动跑完。
+#
+# 静态版本（见上游 README）：前端静态产物 + 通过 NUXT_PUBLIC_API_URL
+# 调用作者公开的 API（默认 https://kms.ikxin.com），无需自建数据库/KMS 后端。
+#
+# 项目站点路径是 /<repo>/，所以必须设 NUXT_APP_BASE_URL，否则 JS/CSS 会 404。
+
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # 每周一凌晨跟上游同步一次（上游更新后自动重建）
+    - cron: '0 3 * * 1'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      NUXT_PUBLIC_API_URL: https://kms.ikxin.com
+      NUXT_APP_BASE_URL: /${{ github.event.repository.name }}/
+      NODE_VERSION: '22'
+      NITRO_PRESET: static
+    steps:
+      - name: 拉取上游源码
+        uses: actions/checkout@v4
+        with:
+          repository: ikxin/kms-tools
+          ref: main
+          fetch-depth: 1
+
+      - name: 准备 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: 准备 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 静态生成（nuxt generate）
+        run: pnpm run generate
+
+      - name: 补 .nojekyll 并检查产物
+        run: |
+          touch .output/public/.nojekyll
+          ls -la .output/public | head -30
+          du -sh .output/public
+
+      - name: 配置 Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: 上传产物
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .output/public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 发布
+        id: deployment
+        uses: actions/deploy-pages@v4
